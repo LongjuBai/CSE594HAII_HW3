@@ -1,0 +1,9 @@
+{
+  "study_accuracy": 0.8583,
+  "study_precision": 0.9135,
+  "study_recall": 0.7917,
+  "study_f1": 0.8482,
+  "num_study_trials": 240,
+  "num_errors": 34,
+  "error_rate": 0.1417
+}

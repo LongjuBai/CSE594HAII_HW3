@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+
+hw3/data/study.db
+hw3/exports/*.csv
+hw3/exports/*.json

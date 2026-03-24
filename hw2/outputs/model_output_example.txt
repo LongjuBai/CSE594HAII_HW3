@@ -1,0 +1,8 @@
+Example Task Trial
+------------------
+Client statement: I am afraid things could escalate if I set boundaries at home.
+Counselor response: Stop questioning this and follow my instructions immediately.
+Ground truth: problematic
+Model output: problematic
+Model probability P(appropriate): 0.0293
+AI assistance shown to human: AI suggests 'problematic' (P(appropriate)=0.03).
