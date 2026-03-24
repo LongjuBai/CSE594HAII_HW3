@@ -391,7 +391,7 @@ function renderCompletion(result) {
     <form class="mturk-submit-form" method="POST" action="${escapeHtml(result.submit_url)}">
       <input type="hidden" name="assignmentId" value="${escapeHtml(result.assignment_id)}">
       <input type="hidden" name="completionCode" value="${escapeHtml(result.completion_code)}">
-      <button type="submit" class="primary-button">Submit back to MTurk</button>
+      <button type="submit" class="secondary-button">Optional: auto-submit to MTurk</button>
     </form>
   ` : '';
 
@@ -405,12 +405,23 @@ function renderCompletion(result) {
     </div>
 
     <div class="panel soft-panel">
-      <p>Please use this completion code for MTurk approval:</p>
+      <p><strong>Step 1:</strong> Copy this completion code.</p>
       <div class="completion-code">${escapeHtml(result.completion_code)}</div>
-      <p class="small-note">If your MTurk page supports automatic submission, use the button below. Otherwise copy the code back into the survey field in MTurk.</p>
+      <p><strong>Step 2:</strong> Return to the MTurk task page and paste the code into the survey code box there.</p>
+      <p class="small-note">The survey code box is on the previous MTurk page, not on this study page. Do not leave this page until you have copied the code.</p>
+      <div class="button-row left">
+        <button type="button" class="primary-button" id="back-to-mturk">Back to MTurk page</button>
+      </div>
       ${submitForm}
     </div>
   `);
+
+  const backButton = document.getElementById('back-to-mturk');
+  if (backButton) {
+    backButton.addEventListener('click', () => {
+      window.history.back();
+    });
+  }
 }
 
 function renderAlreadyCompleted() {
