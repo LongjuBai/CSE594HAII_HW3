@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import mimetypes
 import os
 import random
 import secrets
 import sqlite3
+import zipfile
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 from study_config import (
+    ADMIN_EXPORT_TOKEN,
     ALLOW_SAME_WORKER_BOTH_CONDITIONS,
     CONDITIONS,
     CONFIDENCE_OPTIONS,
@@ -176,8 +179,185 @@ def init_database() -> int:
         conn.close()
 
 
+
+EXPORT_PARTICIPANT_FIELDS = [
+    "participant_id",
+    "worker_id",
+    "assignment_id",
+    "hit_id",
+    "turk_submit_to",
+    "condition",
+    "status",
+    "started_at",
+    "completed_at",
+    "completion_code",
+    "n_trials",
+    "user_agent",
+    "ip_address",
+    "overall_confidence",
+    "workload",
+    "ai_helpfulness",
+    "comments",
+]
+
+EXPORT_RESPONSE_FIELDS = [
+    "participant_id",
+    "trial_id",
+    "order_index",
+    "participant_label",
+    "confidence",
+    "time_spent_ms",
+    "ai_requested",
+    "ai_request_elapsed_ms",
+    "is_correct",
+    "submitted_at",
+]
+
+EXPORT_JOINED_FIELDS = [
+    "participant_id",
+    "worker_id",
+    "assignment_id",
+    "hit_id",
+    "condition",
+    "started_at",
+    "completed_at",
+    "completion_code",
+    "overall_confidence",
+    "workload",
+    "ai_helpfulness",
+    "order_index",
+    "trial_id",
+    "participant_label",
+    "trial_confidence",
+    "time_spent_ms",
+    "ai_requested",
+    "ai_request_elapsed_ms",
+    "is_correct",
+    "topic",
+    "risk_level",
+    "difficulty",
+    "input_client_statement",
+    "input_counselor_response",
+    "ground_truth",
+    "model_output",
+    "model_probability",
+    "ai_assistance",
+]
+
+
 def row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
     return {key: row[key] for key in row.keys()}
+
+
+def export_mean(values: List[float]) -> Optional[float]:
+    return round(sum(values) / len(values), 4) if values else None
+
+
+def collect_export_rows(conn: sqlite3.Connection) -> Dict[str, Any]:
+    participants = [
+        dict(row)
+        for row in conn.execute("SELECT * FROM participants ORDER BY started_at").fetchall()
+    ]
+    responses = [
+        dict(row)
+        for row in conn.execute("SELECT * FROM responses ORDER BY submitted_at").fetchall()
+    ]
+    joined = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT
+                p.participant_id,
+                p.worker_id,
+                p.assignment_id,
+                p.hit_id,
+                p.condition,
+                p.started_at,
+                p.completed_at,
+                p.completion_code,
+                p.overall_confidence,
+                p.workload,
+                p.ai_helpfulness,
+                r.order_index,
+                r.trial_id,
+                r.participant_label,
+                r.confidence AS trial_confidence,
+                r.time_spent_ms,
+                r.ai_requested,
+                r.ai_request_elapsed_ms,
+                r.is_correct,
+                t.topic,
+                t.risk_level,
+                t.difficulty,
+                t.input_client_statement,
+                t.input_counselor_response,
+                t.ground_truth,
+                t.model_output,
+                t.model_probability,
+                t.ai_assistance
+            FROM responses r
+            JOIN participants p ON p.participant_id = r.participant_id
+            JOIN trials t ON t.trial_id = r.trial_id
+            ORDER BY p.started_at, r.order_index
+            """
+        ).fetchall()
+    ]
+
+    by_condition = {}
+    for condition in ["baseline", "ai"]:
+        condition_rows = [row for row in joined if row["condition"] == condition]
+        by_condition[condition] = {
+            "participants": sum(1 for row in participants if row["condition"] == condition),
+            "responses": len(condition_rows),
+            "accuracy": export_mean([row["is_correct"] for row in condition_rows]),
+            "avg_time_spent_ms": export_mean([row["time_spent_ms"] for row in condition_rows]),
+            "avg_trial_confidence": export_mean([row["trial_confidence"] for row in condition_rows]),
+            "ai_reveal_rate": export_mean([row["ai_requested"] for row in condition_rows]) if condition == "ai" else None,
+        }
+
+    summary = {
+        "participants_total": len(participants),
+        "participants_completed": sum(1 for row in participants if row["status"] == "completed"),
+        "responses_total": len(responses),
+        "by_condition": by_condition,
+    }
+    return {
+        "participants": participants,
+        "responses": responses,
+        "joined_trials": joined,
+        "summary": summary,
+    }
+
+
+def rows_to_csv_bytes(rows: List[Dict[str, Any]], fieldnames: List[str]) -> bytes:
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue().encode("utf-8")
+
+
+def build_export_zip_bytes(conn: sqlite3.Connection) -> bytes:
+    export_payload = collect_export_rows(conn)
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "participants.csv",
+            rows_to_csv_bytes(export_payload["participants"], EXPORT_PARTICIPANT_FIELDS),
+        )
+        zf.writestr(
+            "responses.csv",
+            rows_to_csv_bytes(export_payload["responses"], EXPORT_RESPONSE_FIELDS),
+        )
+        zf.writestr(
+            "joined_trials.csv",
+            rows_to_csv_bytes(export_payload["joined_trials"], EXPORT_JOINED_FIELDS),
+        )
+        zf.writestr(
+            "summary.json",
+            json.dumps(export_payload["summary"], indent=2).encode("utf-8"),
+        )
+    return zip_buffer.getvalue()
 
 
 def find_existing_participant(
@@ -599,6 +779,9 @@ class StudyRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/health":
             send_json(self, {"ok": True, "time": utc_now_iso()})
             return
+        if parsed.path == "/admin/export":
+            self.handle_admin_export(parse_qs(parsed.query))
+            return
         if parsed.path.startswith("/static/"):
             serve_static(self, parsed.path)
             return
@@ -677,6 +860,25 @@ class StudyRequestHandler(BaseHTTPRequestHandler):
             send_json(self, result)
         finally:
             conn.close()
+
+    def handle_admin_export(self, query: Dict[str, List[str]]) -> None:
+        token = query.get("token", [""])[0]
+        if not ADMIN_EXPORT_TOKEN or token != ADMIN_EXPORT_TOKEN:
+            self.send_error(403, "Forbidden.")
+            return
+
+        conn = get_db()
+        try:
+            raw = build_export_zip_bytes(conn)
+        finally:
+            conn.close()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition", "attachment; filename=\"hw3_export.zip\"")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
 
 
 def parse_args() -> argparse.Namespace:

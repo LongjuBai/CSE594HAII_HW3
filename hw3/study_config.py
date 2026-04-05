@@ -6,6 +6,7 @@ BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
 HW2_DATASET = ROOT_DIR / "hw2" / "data" / "study_dataset_final.csv"
 DB_PATH = Path(os.environ.get("STUDY_DB_PATH", str(BASE_DIR / "data" / "study.db")))
+ADMIN_EXPORT_TOKEN = os.environ.get("ADMIN_EXPORT_TOKEN", "")
 STATIC_DIR = BASE_DIR / "static"
 EXPORT_DIR = BASE_DIR / "exports"
 
